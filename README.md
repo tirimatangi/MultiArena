@@ -92,9 +92,9 @@ so `UnsynchronizedArenaResource` will be used. In a multi-threaded case, simply 
         vec.push_back(i);
 
     std::cout << "vec.size() = " << vec.size() <<  ", "
-              << "number of allocated memory chucks = " << arenaResource.numberOfAllocations() << ".\n";
+              << "number of allocated memory chunks = " << arenaResource.numberOfAllocations() << ".\n";
 // Output:
-// vec.size() = 8, number of allocated memory chucks = 1.
+// vec.size() = 8, number of allocated memory chunks = 1.
 ```
 
 ### Memory resource living in heap
@@ -106,9 +106,9 @@ so `UnsynchronizedArenaResource` will be used. In a multi-threaded case, simply 
         lst.push_back(i);  // Will do one allocation per push_back.
 
     std::cout << "lst.size() = " << lst.size() <<  ", "
-                << "number of allocated memory chucks = " << arenaResource.numberOfAllocations() << ".\n";
+                << "number of allocated memory s = " << arenaResource.numberOfAllocations() << ".\n";
 // Output:
-// lst.size() = 256, number of allocated memory chucks = 256.
+// lst.size() = 256, number of allocated memory chunks = 256.
 ```
 In this example, the memory for the arenas was allocated by default from the standard
 [new-delete resource](https://en.cppreference.com/w/cpp/memory/new_delete_resource).
@@ -122,7 +122,7 @@ For a runnable example, see Example 1.1 in [example-1.cc](https://github.com/tir
 
 ## Using MultiArena with unique pointers
 
-`std::unique_ptr` can own an object allocated from a MultiArena resource and deallocate it automatically when the object goes out of scope. The object can be allocated passed to a unique pointer with function `MultiArena::makePolymorphicUnique<T>(pmr, args...)`.
+`std::unique_ptr` can own an object allocated from a MultiArena resource and deallocate it automatically when the object goes out of scope. The object can be allocated and passed to a unique pointer with function `MultiArena::makePolymorphicUnique<T>(pmr, args...)`.
 The function returns a unique pointer pointing to an object of type `T`. The object has been is allocated from the MultiArena resource pointed by `pmr` and constructed with constructor `T(args...)`.
 
 Let's look at an example.
@@ -268,7 +268,7 @@ Exceptions may be prohibited in some applications. In that case you can turn the
 flag MULTIARENA_DISABLE_EXCEPTIONS (i.e. `-D MULTIARENA_DISABLE_EXCEPTIONS`) when compiling.
 Now a failed allocation will return `nullptr` without throwing an exception.
 
-## Debug helper resource for tuning the number arenas and arena sizes
+## Debug helper resource for tuning the number of arenas and arena sizes
 
 In addition to the four MultiArena resource classes explained above,
 there is a fifth class called `MultiArena::StatisticsArenaResource`.
@@ -278,7 +278,7 @@ It can also help you trouble-shoot memory leaks by telling
 the addresses of active memory allocations.
 
 `StatisticsArenaResource` behaves otherwise like a thread-safe `SynchronizedArenaResource` except
-that it keeps track of the addresses of the allocated chucks and their sizes. This information
+that it keeps track of the addresses of the allocated chunks and their sizes. This information
 is stored internally into a map.
 Normally it is not the duty of a MultiArena resource to keep track of this information,
 so `StatisticsArenaResource` is a bit slower than the other four versions.
@@ -295,7 +295,7 @@ and dig out the allocated addresses and allocation sizes from the map.
     for (int i = 0; i < 4; ++i) {
         vectors[i].resize(10*(i+1));
         std::cout << "vectors["<<i<<"].size() = " << vectors[i].size() <<  " ints, "
-                    << "number of allocated chucks = " << arenaResource.numberOfAllocations() << '\n';
+                    << "number of allocated chunks = " << arenaResource.numberOfAllocations() << '\n';
     }
 
     // Print {address, allocation size} - pairs.
@@ -306,10 +306,10 @@ and dig out the allocated addresses and allocation sizes from the map.
 
     std::pmr::set_default_resource(oldDefaultResource);
 // output:
-// vectors[0].size() = 10 ints, number of allocated chucks = 1
-// vectors[1].size() = 20 ints, number of allocated chucks = 2
-// vectors[2].size() = 30 ints, number of allocated chucks = 3
-// vectors[3].size() = 40 ints, number of allocated chucks = 4
+// vectors[0].size() = 10 ints, number of allocated chunks = 1
+// vectors[1].size() = 20 ints, number of allocated chunks = 2
+// vectors[2].size() = 30 ints, number of allocated chunks = 3
+// vectors[3].size() = 40 ints, number of allocated chunks = 4
 //
 // Address map has 4 active allocations:
 //   Address 0x560e0bf3b1c0 has 160 bytes
@@ -331,7 +331,7 @@ shows a runnable example of each of these methods.
 
 - `addressToBytesMap()` returns a const pointer to `std::map<void*,uint32_t>`. It maps an allocated (but not yet deallocated) address to the number of bytes requested at the said allocation. Note that the space for the map is allocated from the system heap.
 - `bytesAllocated()` returns the aggregate number of bytes from all active allocations. Note that number of active allocations can be found with either `arenaResource.numberOfAllocations()` or `arenaResource.addressToBytesMap()->size()`.
-- `histogram()` returns an `std::map<uint32_t, uint32_t>` which maps an allocation size in bytes to the frequency of such allocations. That is, it tells how many chucks of the given size there are in the set of active allocations. For example, if there are 10 allocations of 256 bytes, then `arenaResource.histogram().at(256) == 10`. The memory for the histogram is allcoated from the system heap.
+- `histogram()` returns an `std::map<uint32_t, uint32_t>` which maps an allocation size in bytes to the frequency of such allocations. That is, it tells how many chunks of the given size there are in the set of active allocations. For example, if there are 10 allocations of 256 bytes, then `arenaResource.histogram().at(256) == 10`. The memory for the histogram is allcoated from the system heap.
 
 The next 3 methods use the histogram to calculate the percentile, mean and standard deviation of the distribution of active allocations.
 
