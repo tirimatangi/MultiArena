@@ -125,59 +125,91 @@ int main()
     cout << "\n*** Example 3.2 *** Demonstrate statistical analysis with a histogram and an address map.\n";
     {
         using namespace MultiArena;
-        // Define an allocator using the statistical memory resource.
-        using T = double;
-        StatisticsArenaResource arenaResource(16, 256);
-        std::pmr::polymorphic_allocator<T> allocator(&arenaResource);
+        // Demonstrate how the statistical resource can be used entirely without heap.
+        // Both the arenas and the statistical data (address map and histogram) can be
+        // allocated from separate upstream resources.
+        constexpr std::size_t numArenas = 16;
+        constexpr std::size_t bytesPerArena = 256;
+        UnsynchronizedArenaResource<2, numArenas * bytesPerArena> upstreamDataResource, upstreamStatisticsResource;
+        try {
+            // Define an allocator using the statistical memory resource.
+            using T = double;
 
-        // Make a few allocations of type T[N]
-        array<unsigned, 12> aN {1, 2, 2, 4, 8, 8, 16, 20, 20, 20, 20, 30};
-        array<T*, aN.size()> aPtr;
-        for (unsigned i = 0; i < aN.size(); ++i)
-            aPtr[i] = allocator.allocate(aN[i]);
+#define NO_HEAP // Undefine to use system heap.
+#ifdef NO_HEAP
+            cout << "Using separate upstream resources for the arenas and the statistics map.\n";
+            StatisticsArenaResource arenaResource(numArenas, bytesPerArena, &upstreamDataResource, &upstreamStatisticsResource);
+#else
+            cout << "Using the default new_delete_resource() for the arenas and the statistics map.\n";
+            StatisticsArenaResource arenaResource(numArenas, bytesPerArena);
+#endif
+            std::pmr::polymorphic_allocator<T> allocator(&arenaResource);
 
-        cout << "The memory resource has:\n  "
-             << arenaResource.numberOfAllocations() << " allocations,\n  "
-             << arenaResource.bytesAllocated() << " bytes allocated in total,\n  "
-             << arenaResource.numberOfBusyArenas() << " occupied arenas out of " << arenaResource.numArenas() << ".\n";
+            // Make a few allocations of type T[N]
+            array<unsigned, 12> aN {1, 2, 2, 4, 8, 8, 16, 20, 20, 20, 20, 30};
+            array<T*, aN.size()> aPtr;
+            for (unsigned i = 0; i < aN.size(); ++i)
+                aPtr[i] = allocator.allocate(aN[i]);
 
-        // Demonstrate address map.
-        auto pMap = arenaResource.addressToBytesMap(); // Returns const pointer to an std::map.
-        cout << "\nAddress map of the " << pMap->size() << " allocations:\n";
-        for (const auto& val : *pMap)
-            cout << "  Address " << std::hex << val.first << std::dec << " has " << val.second << " bytes\n";
+            cout << "The memory resource has:\n  "
+                << arenaResource.numberOfAllocations() << " allocations,\n  "
+                << arenaResource.bytesAllocated() << " bytes allocated in total,\n  "
+                << arenaResource.numberOfBusyArenas() << " occupied arenas out of " << arenaResource.numArenas() << ".\n";
 
-        // Demonstrate histogram of allocation sizes.
-        cout << "\nHistogram of allocation sizes:\n";
-        auto hist = arenaResource.histogram();
-        for (auto x : hist)
-            cout << "  A chunk of " <<x.first << " bytes has been allocated " << x.second << " times\n";
+            // Demonstrate address map.
+            auto pMap = arenaResource.addressToBytesMap(); // Returns const pointer to an std::map.
+            cout << "\nAddress map of the " << pMap->size() << " allocations:\n";
+            for (const auto& val : *pMap)
+                cout << "  Address " << std::hex << val.first << std::dec << " has " << val.second << " bytes\n";
 
-        // Demonstrate percentile calculator.
-        cout << "\nPercentiles of allocated chunks:\n";
-        for (double pc : {0.0, 0.1, 0.5, 0.9, 1.0})
-            cout << "  " << pc*100 << "% of allocated chunks are smaller than or equal to "
-                 << arenaResource.percentile(pc) << " bytes.\n";
+            // Demonstrate histogram of allocation sizes.
+            cout << "\nHistogram of allocation sizes:\n";
+            auto hist = arenaResource.histogram();
+            for (auto x : hist)
+                cout << "  A chunk of " <<x.first << " bytes has been allocated " << x.second << " times\n";
 
-        cout << "\nAverage size of allocations = " << arenaResource.mean() << " bytes.\n"
-            << "Standard deviations of allocations = " << arenaResource.stdDev() << " bytes.\n";
+            // Demonstrate percentile calculator.
+            cout << "\nPercentiles of allocated chunks:\n";
+            for (double pc : {0.0, 0.1, 0.5, 0.9, 1.0})
+                cout << "  " << pc*100 << "% of allocated chunks are smaller than or equal to "
+                    << arenaResource.percentile(pc) << " bytes.\n";
 
-        // There is no need to deallocate as the arenas will just wink out of existance
-        // as they go out of scope.
-        // The deallocation is done here for demonstration only.
-        for (unsigned i = 0; i < aN.size(); ++i)
-            allocator.deallocate(aPtr[i], aN[i]);
-        cout << "\nAfter deallocate, the number of allocations is " << arenaResource.numberOfAllocations() << ".\n";
+            cout << "\nAverage size of allocations = " << arenaResource.mean() << " bytes.\n"
+                << "Standard deviations of allocations = " << arenaResource.stdDev() << " bytes.\n";
 
-        // Double free will throw an exception which will call std::terminate.
-        // Uncomment the next line to test double-free detection.
-        // allocator.deallocate(aPtr[0], aN[0]);
+            // There is no need to deallocate as the arenas will just wink out of existance
+            // as they go out of scope.
+            // The deallocation is done here for demonstration only.
+            for (unsigned i = 0; i < aN.size(); ++i)
+                allocator.deallocate(aPtr[i], aN[i]);
+            cout << "\nAfter deallocate, the number of allocations in StatisticsArenaResource is " << arenaResource.numberOfAllocations() << ".\n";
 
-        // The outcome will be:
-        /*
-         terminate called after throwing an instance of 'std::runtime_error'
-           what():  Attempt to deallocate from an address which does not hold allocated data.
-        */
-    }
+            cout << "Before StatisticsArenaResource has gone out of scope, \n";
+            cout << "  upstreamDataResource has " << upstreamDataResource.numberOfAllocations() << " allocations.\n";
+            cout << "  upstreamStatisticsResource has " << upstreamStatisticsResource.numberOfAllocations() << " allocations.\n";
+#ifdef NO_HEAP
+            assert(upstreamDataResource.numberOfAllocations() > 0);
+            assert(upstreamStatisticsResource.numberOfAllocations() > 0);
+#endif
+
+            // Double free will throw an exception which will call std::terminate.
+            // Uncomment the next line to test double-free detection.
+            // allocator.deallocate(aPtr[0], aN[0]);
+
+            // The outcome will be:
+            /*
+            terminate called after throwing an instance of 'std::runtime_error'
+            what():  Attempt to deallocate from an address which does not hold allocated data.
+            */
+        }
+        catch (const std::bad_alloc& e) {
+            cout << "std::bad_alloc has been thrown. e.what() = " << e.what() << '\n';
+        }
+        cout << "When the StatisticsArenaResource has gone out of scope, \n";
+        cout << "  upstreamDataResource has " << upstreamDataResource.numberOfAllocations() << " allocations.\n";
+        cout << "  upstreamStatisticsResource has " << upstreamStatisticsResource.numberOfAllocations() << " allocations.\n";
+        assert(upstreamDataResource.numberOfAllocations() == 0);
+        assert(upstreamStatisticsResource.numberOfAllocations() == 0);
+   }
     return 0;
 }

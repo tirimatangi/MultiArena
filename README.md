@@ -29,7 +29,7 @@ and marked as active.
 The occupied arenas know how many allocations they hold. Hence, deallocations are very simple.
 Only the allocation counter is decremented. Once the counter reaches zero, we know that
 every allocation in the arena has been deallocated and the arena has become empty again.
-It can now be returned to the set of free arenas.
+It can now be returned to the list of free arenas.
 
 ### Synchronized vs unsynchronized memory resources
 
@@ -37,6 +37,9 @@ MultiArena resource classes come in synchronized and unsynchronized variants,
 just like [std::pmr::synchronized_pool_resource](https://en.cppreference.com/w/cpp/memory/synchronized_pool_resource)
 and [std::pmr::unsynchronized_pool_resource](https://en.cppreference.com/w/cpp/memory/unsynchronized_pool_resource).
 The unsynchronized version is fast and thread-unsafe whereas the synchronized version is a bit slower and thread-safe.
+The synchronized version uses locks on allocation so if several threads are using the same memory resource,
+they will sometimes have to wait each other. Deallocation is mostly lock-free even though a lock is acquired
+when an arena becomes empty and is returned to the list of free arenas.
 
 The following example shows how to allocate synchronized and unsynchronized resources which live in either stack or heap.
 In each case, there are 16 arenas, containing 1024 bytes each.
@@ -48,6 +51,12 @@ In each case, there are 16 arenas, containing 1024 bytes each.
     MultiArena::SynchronizedArenaResource<16, 1024> synchronized_in_stack;
     MultiArena::SynchronizedArenaResource synchronized_in_heap(16, 1024);
 ```
+
+In [this chapter](https://github.com/tirimatangi/MultiArena#multiarena-resource-living-in-heap-or-in-another-resource) below we show how to store the data in memory reserved from an upstream memory resource instead of the heap (a.k.a. `std::pmr::new_delete_resource`).
+
+During the debugging phase, when the number and the size of the arenas may not be known as yet,
+the above memory resources can be replaced with a debug helper.
+More on that [below](https://github.com/tirimatangi/MultiArena#debug-helper-resource-for-tuning-the-number-of-arenas-and-arena-sizes).
 
 ### Member functions for status inquiry
 
@@ -63,8 +72,7 @@ The methods are as follows:
 The latter two methods can for instance be used in an assert to detect possible memory leaks.
 Note that this is not trivially possible with standard new-delete allocator.
 
-Examples on calling these methods can be found in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
-
+Examples on calling these methods can be found in [example-1.cc](examples/example-1.cc).
 
 ## Using MultiArena with std-containers
 
@@ -82,7 +90,7 @@ for `std` containers. These examples run on a single thread,
 so `UnsynchronizedArenaResource` will be used. In a multi-threaded case, simply replace
 `UnsynchronizedArenaResource` with `SynchronizedArenaResource`.
 
-### Memory resource living in stack
+### MultiArena resource living in stack
 
 ```c++
     MultiArena::UnsynchronizedArenaResource<16, 1024> arenaResource; // 16 arenas, 1024 bytes/arena
@@ -97,7 +105,7 @@ so `UnsynchronizedArenaResource` will be used. In a multi-threaded case, simply 
 // vec.size() = 8, number of allocated memory chunks = 1.
 ```
 
-### Memory resource living in heap
+### MultiArena resource living in heap or in another resource
 
 ```c++
     MultiArena::UnsynchronizedArenaResource arenaResource(16, 1024); // 16 arenas, 1024 bytes/arena
@@ -118,7 +126,7 @@ However, any upstream resource can be used by simply passing it to a MultiArena 
         // like above from this on...
 ```
 
-For a runnable example, see Example 1.1 in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
+For a runnable example, see Example 1.1 in [example-1.cc](examples/example-1.cc).
 
 ## Using MultiArena with unique pointers
 
@@ -144,7 +152,7 @@ Let's look at an example.
 //  Number of allocations after  ptr gone out of scope: 0
 ```
 
-For a runnable example, see Example 1.2 in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
+For a runnable example, see Example 1.2 in [example-1.cc](examples/example-1.cc).
 
 ## Using MultiArena with shared pointers
 
@@ -190,7 +198,7 @@ Here is an example.
 //   Shared pointer use count = 0
 ```
 
-For a runnable example, see Example 1.3 in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
+For a runnable example, see Example 1.3 in [example-1.cc](examples/example-1.cc).
 
 
 ## Using MultiArena with std::pmr::polymorphic_allocator
@@ -236,7 +244,7 @@ In total, there can be as many such allocations as there are arenas.
 //   Number of all  arenas = 16
 ```
 
-For a runnable example, see Example 1.4 in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
+For a runnable example, see Example 1.4 in [example-1.cc](examples/example-1.cc).
 
 
 ## On exceptions
@@ -260,7 +268,7 @@ Note that an exception does not mean corruption. The memory resource is still al
 and can be used normally.
 
 For a runnable example on how to catch these exceptions and recover,
-see Example 1.4 in [example-1.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-1.cc).
+see Example 1.4 in [example-1.cc](examples/example-1.cc).
 
 ### No exceptions? No problems!
 
@@ -272,16 +280,34 @@ Now a failed allocation will return `nullptr` without throwing an exception.
 
 In addition to the four MultiArena resource classes explained above,
 there is a fifth class called `MultiArena::StatisticsArenaResource`.
-It is there to help you optimize the capacity of arena resources
+It helps you optimize the capacity of arena resources
 in terms of how many and how large arenas the resource should own.
 It can also help you trouble-shoot memory leaks by telling
 the addresses of active memory allocations.
 
 `StatisticsArenaResource` behaves otherwise like a thread-safe `SynchronizedArenaResource` except
 that it keeps track of the addresses of the allocated chunks and their sizes. This information
-is stored internally into a map.
+is stored internally in a map.
 Normally it is not the duty of a MultiArena resource to keep track of this information,
 so `StatisticsArenaResource` is a bit slower than the other four versions.
+
+The constructor is like so:
+
+```c++
+    StatisticsArenaResource(SizeType numArenas,
+                            SizeType arenaSize,
+                            std::pmr::memory_resource* mrData = nullptr,
+                            std::pmr::memory_resource* mrStatistics = nullptr)
+```
+
+- If the 3rd argument `mrData` is not null, the arenas will be stored in memory
+extracted from the given upstream memory resource.
+- If the 4th argument `mrStatistics` is not null, the statistical information will be stored in memory
+extracted from the given upstream memory resource.
+- A null pointer means that the default system heap will be used.
+
+Example 3.2 in [example-3.cc](examples/example-3.cc)
+shows how to use other MultiArenas as upstream resources to avoid heap usage.
 
 Let's look at an example where the we allocate four vectors from the memory resource
 and dig out the allocated addresses and allocation sizes from the map.
@@ -317,7 +343,7 @@ and dig out the allocated addresses and allocation sizes from the map.
 //   Address 0x560e0bf3b2d8 has 80 bytes
 //   Address 0x560e0bf3b328 has 40 bytes
 ```
-Example 3.1 in [example-3.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-3.cc)
+Example 3.1 in [example-3.cc](examples/example-3.cc)
 is an important example which demonstrates how exceptions and the statictical resource can be used
 together to optimize the sizes and the number of arenas. In the example, the capacity of the memory resource
 is progressively increased until the mockup application runs smoothly.
@@ -326,12 +352,12 @@ is progressively increased until the mockup application runs smoothly.
 ### Helper methods in StatisticsArenaResource
 
 With the following methods you can glean information about the state of the memory resource.
-Example 3.2 in [example-3.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-3.cc)
+Example 3.2 in [example-3.cc](examples/example-3.cc)
 shows a runnable example of each of these methods.
 
-- `addressToBytesMap()` returns a const pointer to `std::map<void*,uint32_t>`. It maps an allocated (but not yet deallocated) address to the number of bytes requested at the said allocation. Note that the space for the map is allocated from the system heap.
+- `addressToBytesMap()` returns a const pointer to `std::pmr::map<void*,uint32_t>`. It maps an allocated (but not yet deallocated) address to the number of bytes requested at the said allocation. Note that the space for the map is allocated from the system heap.
 - `bytesAllocated()` returns the aggregate number of bytes from all active allocations. Note that number of active allocations can be found with either `arenaResource.numberOfAllocations()` or `arenaResource.addressToBytesMap()->size()`.
-- `histogram()` returns an `std::map<uint32_t, uint32_t>` which maps an allocation size in bytes to the frequency of such allocations. That is, it tells how many chunks of the given size there are in the set of active allocations. For example, if there are 10 allocations of 256 bytes, then `arenaResource.histogram().at(256) == 10`. The memory for the histogram is allcoated from the system heap.
+- `histogram()` returns an `std::pmr::map<uint32_t, uint32_t>` which maps an allocation size in bytes to the frequency of such allocations. That is, it tells how many chunks of the given size there are in the set of active allocations. For example, if there are 10 allocations of 256 bytes, then `arenaResource.histogram().at(256) == 10`. The memory for the histogram is allcoated from the system heap.
 
 The next 3 methods use the histogram to calculate the percentile, mean and standard deviation of the distribution of active allocations.
 
@@ -342,8 +368,8 @@ The next 3 methods use the histogram to calculate the percentile, mean and stand
 ## Example use case
 
 Suppose you get compressed images from a camera at regular intervals.
-The size of each image is different. Due to the compression
-the image sizes depend on the amount of details and vary a lot.
+The size of each image is different. Due to the compression,
+the image sizes depend on the amount of details and can vary a lot.
 Each image goes to analysis which is done in parallel on several threads.
 The analysis takes a random amount of time depending on whether or not there is
 anything interesting in the image. Once the analysis is done, the image
@@ -358,8 +384,8 @@ and the time the analysis takes so that the arenas don't run out during the oper
 
 ## So, was it worth it?
 
-[example-2.cc](https://github.com/tirimatangi/MultiArena/blob/main/examples/example-2.cc)
-simulates the use case described above. On each round, the mockup application
+[example-2.cc](examples/example-2.cc)
+simulates the use case described above. On each round, the mock-up application
 allocates a random chunk of memory.
 It then writes something to the chunk and keeps it allocated for a random number of rounds.
 Before the chunk expires, the application reads the memory and verifies that the contents have not changed.
@@ -382,12 +408,12 @@ for reading and writing into the memory. This way the effect of cache locality a
 The results are as follows:
 
 1. In unsynchronized mode (i.e. one thread only), the application using the arena resource is
-   - +22% faster than the default `std::pmr::new_delete_resource`
-   - +10% faster than `std::pmr::unsynchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator)
+   - +22% faster than the default `std::pmr::new_delete_resource`.
+   - +10% faster than `std::pmr::unsynchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 2. In synchronized mode with 16 parallel threads, the application using the arena resource is
-   - -2% to -5% _slower_ than the default `std::pmr::new_delete_resource`
-   - +7 to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator)
+   - -2% to -5% _slower_ than the default `std::pmr::new_delete_resource`.
+   - +7 to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 The tests were run in (an ancient) Corei5-4210U machine with 4 cores on Ubuntu 22.04.
 
