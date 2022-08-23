@@ -173,10 +173,19 @@ struct ArenaMemoryResourceCorruption : std::runtime_error
     std::size_t alignment = 0;
 };
 
+// Replaces an std::pmr container with a new instance which is otherwise similar
+// to the previous one but may use a different memory resource.
+template <class PMR_CONTAINER, class... Args>
+void constructPmrContainerAt(PMR_CONTAINER* pPmrCont, std::pmr::memory_resource* mr, Args... args)
+{
+    pPmrCont->~PMR_CONTAINER();
+    ::new (pPmrCont) PMR_CONTAINER(args..., mr);
+}
+
 template <SizeType NUM_ARENAS = 0, SizeType ARENA_SIZE = 0>
 class UnsynchronizedArenaResource;
 
-// Base class for all variants of polymorphic memory resources.
+// Base class for all variants of unsynchronized polymorphic memory resources.
 template <class Derived>
 class UnsynchronizedArenaResourceBase : public std::pmr::memory_resource
 {
@@ -393,12 +402,14 @@ public:
     {
         assert(numArenas > 0);
         assert(arenaSize % alignof(std::max_align_t) == 0);
-        _memory_resource = mr ? mr : std::pmr::new_delete_resource();
+        if (!mr)
+            mr = std::pmr::new_delete_resource();
 
         // Allocate arenas using the given memory resource.
-        _numAllocationsInArena = std::pmr::vector<SizeType>(numArenas, _memory_resource);
-        _freeList = std::pmr::vector<SizeType>(numArenas, _memory_resource);
-        _arenaData = std::pmr::vector<std::byte>(numArenas * arenaSize, std::byte{}, _memory_resource);
+        constructPmrContainerAt(&_numAllocationsInArena, mr, numArenas);
+        constructPmrContainerAt(&_freeList, mr, numArenas);
+        constructPmrContainerAt(&_arenaData, mr, numArenas * arenaSize, std::byte{});
+
         this->initializeArenas();
     }
 
@@ -406,9 +417,8 @@ public:
     SizeType arenaSize() const { return _arenaSize; }
 
     friend class UnsynchronizedArenaResourceBase<UnsynchronizedArenaResource<0, 0>>;
+
 protected:
-    // Memory resource from which the vectors below will be allocated.
-    std::pmr::memory_resource* _memory_resource;
     // Number of allocations in each arena since the arena was activated.
     std::pmr::vector<SizeType> _numAllocationsInArena;
     // List of free arenas.
@@ -424,7 +434,7 @@ protected:
 template <SizeType NUM_ARENAS = 0, SizeType ARENA_SIZE = 0>
 class SynchronizedArenaResource;
 
-// Base class for all variants of polymorphic memory resources.
+// Base class for all variants of synchronized polymorphic memory resources.
 template <class Derived>
 class SynchronizedArenaResourceBase : public std::pmr::memory_resource
 {
@@ -676,22 +686,15 @@ public:
     {
         assert(numArenas > 0);
         assert(arenaSize % alignof(std::max_align_t) == 0);
-        _memory_resource = mr ? mr : std::pmr::new_delete_resource();
+        if (!mr)
+            mr = std::pmr::new_delete_resource();
 
         // Allocate arenas using the given memory resource.
-        _arenaData = std::pmr::vector<std::byte>(numArenas * arenaSize, std::byte{}, _memory_resource);
+        constructPmrContainerAt(&_numAllocationsInArena, mr, numArenas);
+        constructPmrContainerAt(&_numDeallocationsInArena, mr, numArenas);
+        constructPmrContainerAt(&_freeList, mr, numArenas);
+        constructPmrContainerAt(&_arenaData, mr, numArenas * arenaSize, std::byte{});
 
-        // operator= does not work if the value type is atomic so use swap.
-        {
-            std::pmr::vector<std::atomic<SizeType>> vec(numArenas, _memory_resource);
-            std::swap(vec, _numAllocationsInArena);
-        }
-        {
-            std::pmr::vector<std::atomic<SizeType>> vec(numArenas, _memory_resource);
-            std::swap(vec, _numDeallocationsInArena);
-        }
-
-        _freeList = std::pmr::vector<SizeType>(numArenas, _memory_resource);
         this->initializeArenas();
     }
 
@@ -699,10 +702,8 @@ public:
     SizeType arenaSize() const { return _arenaSize; }
 
     friend class SynchronizedArenaResourceBase<SynchronizedArenaResource<0, 0>>;
-protected:
 
-    // Memory resource from which the vectors below will be allocated.
-    std::pmr::memory_resource* _memory_resource;
+protected:
     // Number of allocations done in each arena since the arena was activated.
     std::pmr::vector<std::atomic<SizeType>> _numAllocationsInArena;
     // Number of de-allocations done in each arena since the arena was activated.
@@ -725,8 +726,10 @@ public:
     using MapType = std::pmr::map<void*, SizeType>;
     using HistogramType = std::pmr::map<SizeType, SizeType>;
 
-    explicit StatisticsArenaResource(SizeType numArenas, SizeType arenaSize, std::pmr::memory_resource* mr = nullptr)
-        : UnsynchronizedArenaResource(numArenas, arenaSize, mr)
+    explicit StatisticsArenaResource(SizeType numArenas, SizeType arenaSize,
+                                     std::pmr::memory_resource* mrData = nullptr,       // Memory resource for arenas which hold the data.
+                                     std::pmr::memory_resource* mrStatistics = nullptr) // Memore resource for statistics (i.e. map and histogram.)
+        : UnsynchronizedArenaResource(numArenas, arenaSize, mrData)
     {
         if constexpr (exceptionsEnabled) {
             if (numArenas <= 0)
@@ -734,9 +737,8 @@ public:
             if (arenaSize % alignof(std::max_align_t) != 0)
                 throw std::runtime_error("Arena size must be divisible by max alignment.");
         }
-        _memory_resource = mr ? mr : std::pmr::new_delete_resource();
-
-        _map = MapType(_memory_resource);
+        _memory_resource_for_statistics = mrStatistics ? mrStatistics : std::pmr::new_delete_resource();
+        _map = MapType(_memory_resource_for_statistics);
     }
 
     // Returns a const pointer to the map which maps allocated addresses to
@@ -760,7 +762,7 @@ public:
     // the number of such blocks, aka histogram of alloction sizes in bytes.
     HistogramType histogram() const
     {
-        HistogramType hist(_memory_resource);
+        HistogramType hist(_memory_resource_for_statistics);
         for (auto it = _map.cbegin(); it != _map.cend(); ++it)
             hist[it->second] += 1;
         return hist;
@@ -874,8 +876,8 @@ private:
     }
 
     std::mutex _mtx;
-    // Memory resource from which the arenas and the statistics map will be allocated.
-    std::pmr::memory_resource* _memory_resource;
+    // Memory resource from which the statistics map will be allocated.
+    std::pmr::memory_resource* _memory_resource_for_statistics;
     // Map of currently allocated addresses to the number of bytes allocated to those addresses.
     MapType _map;
 };
