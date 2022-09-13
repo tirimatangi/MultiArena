@@ -190,7 +190,7 @@ template <class Derived>
 class UnsynchronizedArenaResourceBase : public std::pmr::memory_resource
 {
 public:
-    UnsynchronizedArenaResourceBase(SizeType numArenas, SizeType arenaSize)
+    UnsynchronizedArenaResourceBase(SizeType /*numArenas*/, SizeType /*arenaSize*/)
     {}
 
     // Total number of allocations combined in all arenas.
@@ -330,6 +330,8 @@ protected:
                        std::size_t bytes = 0,
                        std::size_t alignment = alignof(std::max_align_t)) override
     {
+        if (p == nullptr)
+            return;
         // Calculate the id of the arena where the address has come from.
         uintptr_t ptrAsInteger = reinterpret_cast<uintptr_t>(p);
         uintptr_t dataAsInteger = reinterpret_cast<uintptr_t>(derived()->_arenaData.data());
@@ -439,7 +441,7 @@ template <class Derived>
 class SynchronizedArenaResourceBase : public std::pmr::memory_resource
 {
 public:
-    SynchronizedArenaResourceBase(SizeType numArenas, SizeType arenaSize)
+    SynchronizedArenaResourceBase(SizeType /*numArenas*/, SizeType /*arenaSize*/)
     {}
 
     // Total number of allocations combined in all arenas.
@@ -598,6 +600,8 @@ protected:
                        std::size_t bytes = 0,
                        std::size_t alignment = alignof(std::max_align_t)) override
     {
+        if (p == nullptr)
+            return;
         // Calculate the id of the arena where the address has come from.
         uintptr_t ptrAsInteger = reinterpret_cast<uintptr_t>(p);
         uintptr_t dataAsInteger = reinterpret_cast<uintptr_t>(derived()->_arenaData.data());
@@ -855,6 +859,8 @@ public:
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override
     {
+        if (bytes == 0)
+            return nullptr;
         const std::lock_guard<std::mutex> lock(_mtx);
         void* p = Base::do_allocate(bytes, alignment);
         _map[p] = bytes;
@@ -867,6 +873,8 @@ private:
                        std::size_t bytes = 0,
                        std::size_t alignment = alignof(std::max_align_t)) override
     {
+        if (p == nullptr)
+            return;
         const std::lock_guard<std::mutex> lock(_mtx);
         if constexpr (exceptionsEnabled) {
             if (_map.erase(p) == 0)
