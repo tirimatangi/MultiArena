@@ -413,7 +413,7 @@ The results are as follows:
 
 2. In synchronized mode with 16 parallel threads, the application using the arena resource is
    - -2% to -5% _slower_ than the default `std::pmr::new_delete_resource`.
-   - +7 to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
+   - +7% to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 The tests were run in (an ancient) Corei5-4210U machine with 4 cores on Ubuntu 22.04.
 
