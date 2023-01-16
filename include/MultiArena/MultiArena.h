@@ -431,6 +431,17 @@ protected:
     SizeType _arenaSize;  // Size of each arena in bytes.
 };  // UnsynchronizedArenaResource in heap
 
+// Two atomic counters living in the same cache line if aligned properly.
+struct AllocationCounter
+{
+    std::atomic<SizeType> allocations = 0;
+    std::atomic<SizeType> deallocations = 0;
+    void reset()
+    {
+        allocations = 0;
+        deallocations = 0;
+    }
+};
 
 // Forward declarations of memory resource classes.
 template <SizeType NUM_ARENAS = 0, SizeType ARENA_SIZE = 0>
@@ -474,8 +485,7 @@ protected:
         // Initialize arena free list
         for (SizeType i = 0; i < derived()->numArenas(); ++i) {
             derived()->_freeList[i] = derived()->numArenas() - 1 - i;
-            derived()->_numAllocationsInArena[i] = 0;
-            derived()->_numDeallocationsInArena[i] = 0;
+            derived()->_numAllocationsInArena[i].reset();
         }
         _freeListHead = derived()->numArenas();
         // Activate the first arena. Al least one arena must be active at all times.
@@ -489,6 +499,12 @@ protected:
     SizeType _freeListHead;     // Indices smaller than this contain free arenas.
     std::mutex _mtx;
 
+    // Pointer to the beginning of the data buffer of the given arena
+    uintptr_t arenaBegin(SizeType arenaId)
+    {
+        return reinterpret_cast<uintptr_t>(derived()->_arenaData.data()) + arenaId * derived()->arenaSize();
+    }
+
     // Returns true and updates the active arena member variables if a free arena is available.
     // Otherwise, returns false and doesn't change anything.
     // Note: the mutex must be locked before this function is called.
@@ -499,7 +515,7 @@ protected:
         --_freeListHead;
         _activeArenaId = derived()->_freeList[_freeListHead];
         // _data points to the first byte of the arena.
-        _data = reinterpret_cast<uintptr_t>(derived()->_arenaData.data()) + _activeArenaId * derived()->arenaSize();
+        _data = arenaBegin(_activeArenaId);
         _bytesReserved = 0;
         return true;
     }
@@ -510,10 +526,9 @@ protected:
     void resetActiveArena()
     {
         MULTIARENA_ASSERT(allocationsInArena(_activeArenaId) == 0);
-        _data = reinterpret_cast<uintptr_t>(derived()->_arenaData.data()) + _activeArenaId * derived()->arenaSize();
+        _data = arenaBegin(_activeArenaId);
         _bytesReserved = 0;
-        derived()->_numAllocationsInArena[_activeArenaId] =
-            derived()->_numDeallocationsInArena[_activeArenaId] = 0;
+        derived()->_numAllocationsInArena[_activeArenaId].reset();
     }
 
     // Recycle the given arena by moving it to the freelist.
@@ -525,8 +540,7 @@ protected:
         MULTIARENA_ASSERT(arenaId != _activeArenaId);
         MULTIARENA_ASSERT(_freeListHead < derived()->numArenas());
         derived()->_freeList[_freeListHead++] = arenaId;
-        derived()->_numAllocationsInArena[arenaId] =
-            derived()->_numDeallocationsInArena[arenaId] = 0;
+        derived()->_numAllocationsInArena[arenaId].reset();
     }
 
 private:
@@ -555,7 +569,7 @@ private:
         _bytesReserved = numReservedBytes;
         _data += bytes;
         // Update the number of allocations made in the current arena.
-        derived()->_numAllocationsInArena[_activeArenaId].fetch_add(1, std::memory_order_relaxed);
+        derived()->_numAllocationsInArena[_activeArenaId].allocations.fetch_add(1, std::memory_order_relaxed);
         return result;
     }
 
@@ -611,15 +625,15 @@ protected:
                 throw ArenaMemoryResourceCorruption(p, bytes, alignment);
         }
         // Did the arena become vacant? If so, either reuse or release.
-        SizeType numDeallocs = derived()->_numDeallocationsInArena[arenaId].fetch_add(1, std::memory_order_relaxed) + 1;
-        SizeType numAllocs = derived()->_numAllocationsInArena[arenaId];
+        AllocationCounter& counter = derived()->_numAllocationsInArena[arenaId];
+        SizeType numDeallocs = counter.deallocations.fetch_add(1, std::memory_order_relaxed) + 1;
+        SizeType numAllocs = counter.allocations;
         if (numAllocs == numDeallocs) {
             // Lock and double check.
             const std::lock_guard<std::mutex> lock(_mtx);
-            MULTIARENA_ASSERT(derived()->_numAllocationsInArena[arenaId] >=
-                              derived()->_numDeallocationsInArena[arenaId]);
-            bool arenaIsVacant = (numAllocs == derived()->_numAllocationsInArena[arenaId]) &&
-                                 (numAllocs == derived()->_numDeallocationsInArena[arenaId]);
+            const AllocationCounter& constCounter = derived()->_numAllocationsInArena[arenaId];
+            MULTIARENA_ASSERT(constCounter.allocations >= constCounter.deallocations);
+            bool arenaIsVacant = (numAllocs == constCounter.allocations) && (numAllocs == constCounter.deallocations);
 
             if (arenaIsVacant) {
                 if (arenaId == _activeArenaId)
@@ -638,8 +652,9 @@ protected:
     // Number of currently active allocation in the given arena.
     SizeType allocationsInArena(SizeType arenaId) const
     {
-        MULTIARENA_ASSERT(derived()->_numAllocationsInArena[arenaId] >= derived()->_numDeallocationsInArena[arenaId]);
-        return derived()->_numAllocationsInArena[arenaId] - derived()->_numDeallocationsInArena[arenaId];
+        const AllocationCounter& counter = derived()->_numAllocationsInArena[arenaId];
+        MULTIARENA_ASSERT(counter.allocations >= counter.deallocations);
+        return counter.allocations - counter.deallocations;
     }
 }; // SynchronizedArenaResourceBase
 
@@ -666,10 +681,8 @@ public:
     friend class SynchronizedArenaResourceBase<SynchronizedArenaResource<NUM_ARENAS, ARENA_SIZE>>;
 protected:
 
-    // Number of allocations done in each arena since the arena was activated.
-    std::array<std::atomic<SizeType>, NUM_ARENAS> _numAllocationsInArena;
-    // Number of de-allocations done in each arena since the arena was activated.
-    std::array<std::atomic<SizeType>, NUM_ARENAS> _numDeallocationsInArena;
+    // Number of allocations and deallocations done in each arena since the arena was activated.
+    alignas(hardware_constructive_interference_size) std::array<AllocationCounter, NUM_ARENAS> _numAllocationsInArena;
     // List of free arenas.
     std::array<SizeType, NUM_ARENAS> _freeList;
     alignas(hardware_constructive_interference_size) // Align to a cache line.
@@ -695,7 +708,6 @@ public:
 
         // Allocate arenas using the given memory resource.
         constructPmrContainerAt(&_numAllocationsInArena, mr, numArenas);
-        constructPmrContainerAt(&_numDeallocationsInArena, mr, numArenas);
         constructPmrContainerAt(&_freeList, mr, numArenas);
         constructPmrContainerAt(&_arenaData, mr, numArenas * arenaSize, std::byte{});
 
@@ -708,10 +720,8 @@ public:
     friend class SynchronizedArenaResourceBase<SynchronizedArenaResource<0, 0>>;
 
 protected:
-    // Number of allocations done in each arena since the arena was activated.
-    std::pmr::vector<std::atomic<SizeType>> _numAllocationsInArena;
-    // Number of de-allocations done in each arena since the arena was activated.
-    std::pmr::vector<std::atomic<SizeType>> _numDeallocationsInArena;
+    // Number of allocations and deallocation done in each arena since the arena was activated.
+    std::pmr::vector<AllocationCounter> _numAllocationsInArena;
     // List of free arenas.
     std::pmr::vector<SizeType> _freeList;
     std::pmr::vector<std::byte> _arenaData;
