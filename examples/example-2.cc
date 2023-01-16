@@ -231,7 +231,7 @@ int main()
          << int(100 * aPerformanceIndex[UnsyncArena] / aPerformanceIndex[UnsyncPool] + 0.5) << "%\n";
     cout << "  Synchronized, " << threadCount << " threads, arena resource   = " << aPerformanceIndex[SyncArena] << '\n';
     cout << "  Synchronized, " << threadCount << " threads, default resource = " << aPerformanceIndex[SyncSystem] << '\n';
-    cout << "  Synchronized, " << threadCount << " threads, default resource = " << aPerformanceIndex[SyncPool] << '\n';
+    cout << "  Synchronized, " << threadCount << " threads, pool resource = " << aPerformanceIndex[SyncPool] << '\n';
     cout << "    --> Relative performance in synchronized mode:\n"
          << "        perf(arena allocator) / perf(system allocator) = "
          << int(100 * aPerformanceIndex[SyncArena] / aPerformanceIndex[SyncSystem] + 0.5) << "%\n";

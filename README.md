@@ -412,16 +412,16 @@ The results are as follows:
    - +10% faster than `std::pmr::unsynchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 2. In synchronized mode with 16 parallel threads, the application using the arena resource is
-   - -2% to -5% _slower_ than the default `std::pmr::new_delete_resource`.
+   - -1% to -5% _slower_ than the default `std::pmr::new_delete_resource`.
    - +7% to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
-The tests were run in (an ancient) Corei5-4210U machine with 4 cores on Ubuntu 22.04.
+The tests were run in (an ancient) Core i5-4210U machine with 4 cores on Ubuntu 22.04.
 
 We note that in the synchronized mode, the default new-delete resource is very good.
 In every other case, the MultiArena resource is faster.
 But even so, the difference in speed is not necessarily the most significant argument for choosing a MultiArena resource.
 The most important argument is the peace of mind. The allocations and deallocations
-run in constant time. The memory resource is entirely your playground which is immune to memory fracmentation and
+run in constant time. The memory resource is entirely your playground which is immune to memory fragmentation and
 disturbance from the other processes which may be running in the system.
 
 Just the ticket for a real-time application.
@@ -431,9 +431,9 @@ Just the ticket for a real-time application.
 The easiest way to compile all examples is to do
 `cmake -DCMAKE_BUILD_TYPE=Release examples` followed by `make`.
 If you don't want to use cmake, the examples can be compiled manually one by one. For instance, <br>
-`g++ examples/example-2.cc -std=c++17 -I include/ -O3 -o example-2`
+`g++ examples/example-2.cc -std=c++17 -I include/ -O3 -pthread -o example-2`
 
 Exceptions can be disabled by defining flag `MULTIARENA_DISABLE_EXCEPTIONS` like so <br>
-`g++ examples/example-2.cc -I include/ -std=c++17 -O3 -DMULTIARENA_DISABLE_EXCEPTIONS`
+`g++ examples/example-2.cc -I include/ -std=c++17 -O3 -pthread -DMULTIARENA_DISABLE_EXCEPTIONS`
 
 The examples have been tested with g++ 11.2.0  and clang++ 14.0.0 but any compiler which complies with C++17 standard should do.
