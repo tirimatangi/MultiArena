@@ -7,6 +7,7 @@
 #include <numeric>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -458,7 +459,7 @@ public:
     // Total number of allocations combined in all arenas.
     std::size_t numberOfAllocations()
     {
-        const std::lock_guard<std::mutex> lock(_mtx);
+        const std::lock_guard<std::shared_mutex> lock(_mtx);
         std::size_t result = 0;
         for (SizeType i = 0; i < derived()->numArenas(); ++i)
             result += allocationsInArena(i);
@@ -468,7 +469,7 @@ public:
     // Number of non-empty arenas.
     SizeType numberOfBusyArenas()
     {
-        const std::lock_guard<std::mutex> lock(_mtx);
+        const std::lock_guard<std::shared_mutex> lock(_mtx);
         auto result = derived()->numArenas() - _freeListHead;
         // The active arena is counted as a busy even if there
         // are no allocations yet.
@@ -492,17 +493,22 @@ protected:
         reserveNextArena();
     }
 
-    uintptr_t _data;    // Pointer to the next free address within the active arena.
-    uintptr_t _bytesReserved; // Number of bytes reserved in the active arena
+    std::atomic<uintptr_t> _data;    // Pointer to the next free address within the active arena.
 
     SizeType _activeArenaId;    // Id of the active arena;
     SizeType _freeListHead;     // Indices smaller than this contain free arenas.
-    std::mutex _mtx;
+    std::shared_mutex _mtx;
 
     // Pointer to the beginning of the data buffer of the given arena
-    uintptr_t arenaBegin(SizeType arenaId)
+    uintptr_t arenaBegin(SizeType arenaId) const
     {
         return reinterpret_cast<uintptr_t>(derived()->_arenaData.data()) + arenaId * derived()->arenaSize();
+    }
+
+    // Number of bytes reserved in the active arena
+    SizeType bytesReserved() const
+    {
+        return SizeType(_data.load(std::memory_order_relaxed) - arenaBegin(_activeArenaId));
     }
 
     // Returns true and updates the active arena member variables if a free arena is available.
@@ -516,7 +522,6 @@ protected:
         _activeArenaId = derived()->_freeList[_freeListHead];
         // _data points to the first byte of the arena.
         _data = arenaBegin(_activeArenaId);
-        _bytesReserved = 0;
         return true;
     }
 
@@ -527,7 +532,6 @@ protected:
     {
         MULTIARENA_ASSERT(allocationsInArena(_activeArenaId) == 0);
         _data = arenaBegin(_activeArenaId);
-        _bytesReserved = 0;
         derived()->_numAllocationsInArena[_activeArenaId].reset();
     }
 
@@ -554,23 +558,22 @@ private:
         return static_cast<Derived*>(this);
     }
 
+    // Tap a new arena if there is not enough space left in the active one.
     // Returns nullptr if all arenas are out of memory and the allocation can't hence be made.
     // Assume that alignment is a power of 2.
+    // Also assume that the mutex locked on entry.
     void* do_allocate_details(std::size_t bytes) noexcept
     {
         // Is there still space in the currently active arena?
-        auto numReservedBytes = _bytesReserved + bytes;
-        if (numReservedBytes > derived()->arenaSize()) { // Tap a new arena.
+        auto numBytesNeeded = bytesReserved() + bytes;
+        if (numBytesNeeded > derived()->arenaSize()) { // Tap a new arena.
             if (reserveNextArena())
                 return do_allocate_details(bytes);
             return nullptr; // We are out of arenas
         }
-        void* result = reinterpret_cast<void*>(_data);
-        _bytesReserved = numReservedBytes;
-        _data += bytes;
         // Update the number of allocations made in the current arena.
         derived()->_numAllocationsInArena[_activeArenaId].allocations.fetch_add(1, std::memory_order_relaxed);
-        return result;
+        return  reinterpret_cast<void*>(_data.fetch_add(bytes, std::memory_order_relaxed));
     }
 
 protected:
@@ -593,15 +596,29 @@ protected:
             return nullptr;
 
         void* result;
-        _mtx.lock();
-        result = do_allocate_details(numBytesNeeded);
-        _mtx.unlock();
-        if constexpr (exceptionsEnabled) {
-            if (result == nullptr) { // Find out the reason for failure.
-                if (numBytesNeeded > derived()->arenaSize()) // Too large block requested
-                    throw AllocateTooLargeBlock(bytes, derived()->arenaSize());
-                else
-                    throw OutOfFreeArenas(derived()->numArenas());
+        _mtx.lock_shared();
+        // Increment the data pointer and see if we are still within the active arena.
+        // Note that the active arena can not change because of the shared lock.
+        auto prevData =_data.fetch_add(numBytesNeeded, std::memory_order_relaxed);
+        // Does the allocated block extend past the end of the buffer?
+        bool bAllocationOk = (prevData + numBytesNeeded) < arenaBegin(_activeArenaId + 1);
+        if (bAllocationOk) { // The allocation still fits in the active arena
+            derived()->_numAllocationsInArena[_activeArenaId].allocations.fetch_add(1, std::memory_order_relaxed);
+            result = reinterpret_cast<void*>(prevData);
+        }
+        _mtx.unlock_shared();
+        if (!bAllocationOk) { // The allocation does not fit in the active arena, so change the arena.
+            _mtx.lock();
+            result = do_allocate_details(numBytesNeeded);
+            _mtx.unlock();
+
+            if constexpr (exceptionsEnabled) {
+                if (result == nullptr) { // Find out the reason for failure.
+                    if (numBytesNeeded > derived()->arenaSize()) // Too large block requested
+                        throw AllocateTooLargeBlock(bytes, derived()->arenaSize());
+                    else
+                        throw OutOfFreeArenas(derived()->numArenas());
+                }
             }
         }
         return result;
@@ -627,14 +644,14 @@ protected:
         // Did the arena become vacant? If so, either reuse or release.
         AllocationCounter& counter = derived()->_numAllocationsInArena[arenaId];
         SizeType numDeallocs = counter.deallocations.fetch_add(1, std::memory_order_relaxed) + 1;
-        SizeType numAllocs = counter.allocations;
+        SizeType numAllocs = counter.allocations.load(std::memory_order_relaxed);
         if (numAllocs == numDeallocs) {
             // Lock and double check.
-            const std::lock_guard<std::mutex> lock(_mtx);
+            const std::lock_guard<std::shared_mutex> lock(_mtx);
             const AllocationCounter& constCounter = derived()->_numAllocationsInArena[arenaId];
             MULTIARENA_ASSERT(constCounter.allocations >= constCounter.deallocations);
-            bool arenaIsVacant = (numAllocs == constCounter.allocations) && (numAllocs == constCounter.deallocations);
-
+            bool arenaIsVacant = (numAllocs == constCounter.allocations.load(std::memory_order_relaxed)) &&
+                                 (numAllocs == constCounter.deallocations.load(std::memory_order_relaxed));
             if (arenaIsVacant) {
                 if (arenaId == _activeArenaId)
                     resetActiveArena(); // The currently active arena became empty so reuse it.
@@ -675,8 +692,8 @@ public:
         this->initializeArenas();
     }
 
-    constexpr SizeType numArenas() { return NUM_ARENAS; }
-    constexpr SizeType arenaSize() { return ARENA_SIZE; }
+    constexpr SizeType numArenas() const { return NUM_ARENAS; }
+    constexpr SizeType arenaSize() const { return ARENA_SIZE; }
 
     friend class SynchronizedArenaResourceBase<SynchronizedArenaResource<NUM_ARENAS, ARENA_SIZE>>;
 protected:

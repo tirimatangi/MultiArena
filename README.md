@@ -408,17 +408,16 @@ for reading and writing into the memory. This way the effect of cache locality a
 The results are as follows:
 
 1. In unsynchronized mode (i.e. one thread only), the application using the arena resource is
-   - +22% faster than the default `std::pmr::new_delete_resource`.
-   - +10% faster than `std::pmr::unsynchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
+   - 22% faster than the default `std::pmr::new_delete_resource`.
+   - 10% faster than `std::pmr::unsynchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 2. In synchronized mode with 16 parallel threads, the application using the arena resource is
-   - -1% to -5% _slower_ than the default `std::pmr::new_delete_resource`.
-   - +7% to +10% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
+   - 5% to 8% faster than the default `std::pmr::new_delete_resource`.
+   - 19% to 21% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
 The tests were run in (an ancient) Core i5-4210U machine with 4 cores on Ubuntu 22.04.
 
-We note that in the synchronized mode, the default new-delete resource is very good.
-In every other case, the MultiArena resource is faster.
+We note that in every case, the MultiArena resource is faster.
 But even so, the difference in speed is not necessarily the most significant argument for choosing a MultiArena resource.
 The most important argument is the peace of mind. The allocations and deallocations
 run in constant time. The memory resource is entirely your playground which is immune to memory fragmentation and
