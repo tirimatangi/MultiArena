@@ -435,4 +435,4 @@ If you don't want to use cmake, the examples can be compiled manually one by one
 Exceptions can be disabled by defining flag `MULTIARENA_DISABLE_EXCEPTIONS` like so <br>
 `g++ examples/example-2.cc -I include/ -std=c++17 -O3 -pthread -DMULTIARENA_DISABLE_EXCEPTIONS`
 
-The examples have been tested with g++ 11.2.0  and clang++ 14.0.0 but any compiler which complies with C++17 standard should do.
+The examples have been tested with g++ 12.2.0  and clang++ 15.0.2 but any compiler which complies with C++17 standard should do.
