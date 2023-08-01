@@ -415,8 +415,6 @@ The results are as follows:
    - 5% to 8% faster than the default `std::pmr::new_delete_resource`.
    - 19% to 21% faster than `std::pmr::synchronized_pool_resource` (which uses the new_delete_resource as the upstream allocator).
 
-The tests were run in (an ancient) Core i5-4210U machine with 4 cores on Ubuntu 22.04.
-
 We note that in every case, the MultiArena resource is faster.
 But even so, the difference in speed is not necessarily the most significant argument for choosing a MultiArena resource.
 The most important argument is the peace of mind. The allocations and deallocations
@@ -424,6 +422,9 @@ run in constant time. The memory resource is entirely your playground which is i
 disturbance from the other processes which may be running in the system.
 
 Just the ticket for a real-time application.
+
+The tests were run in (an ancient) Core i5-4210U machine with 4 cores on Ubuntu 22.04.
+*Note*  You should double-check the numbers if you are using Windows Subsystem for Linux (WSL).
 
 ## Compilation
 
