@@ -424,6 +424,7 @@ disturbance from the other processes which may be running in the system.
 Just the ticket for a real-time application.
 
 The tests were run in (an ancient) Core i5-4210U machine with 4 cores on Ubuntu 22.04.
+
 *Note*  You should double-check the numbers if you are using Windows Subsystem for Linux (WSL).
 
 ## Compilation
