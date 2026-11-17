@@ -24,11 +24,11 @@ Variant runApplication(MultiArena::StatisticsArenaResource* mr)
 {
     constexpr std::size_t numVectors = 64;
     constexpr std::size_t vectorSize = 4096;
-    using T = int;
+    using T = double;
     constexpr unsigned numIterationsPerRound = 1 << 16;
     std::srand(0x1234abcd);
     try {
-        std::array<std::pmr::vector<int>, numVectors> aVec;
+        std::array<std::pmr::vector<T>, numVectors> aVec;
         std::size_t numRoundsDone = 0;
         double timeSoFar = 0;
         while (timeSoFar < runtimeSecs) {
@@ -36,7 +36,7 @@ Variant runApplication(MultiArena::StatisticsArenaResource* mr)
             for (int i = 0; i < numIterationsPerRound; ++i) {
                 int j = std::rand() % numVectors; // Destination index of the new vector
                 // Verify that the previous vector at index j is still sane before overwriting it.
-                int k = 0;
+                T k{};
                 for (auto val : aVec[j])
                     if (val != ++k) {
                         throw std::runtime_error("runApplication: memory corruption detected!");
@@ -45,7 +45,7 @@ Variant runApplication(MultiArena::StatisticsArenaResource* mr)
                 // Replace the vector at index j with the new vector.
                 aVec[j] = std::pmr::vector<T>();
                 auto sz = std::rand() % (vectorSize / sizeof(T)); // Size of the new vector
-                aVec[j].resize(sz);
+                aVec[j].assign(sz, T{}); //  .resize(sz);
                 // Fill the vector with known numbers
                 k = 0;
                 for (auto& val : aVec[j])

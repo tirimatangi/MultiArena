@@ -23,7 +23,7 @@ constexpr double runtimeSecs = 4.0;
 // false means that the arenas are allocated from stack or static memory.
 constexpr bool bArenasInHeap = false;
 
-auto makeUnsynchronizedArenaResource()
+static auto makeUnsynchronizedArenaResource()
 {
     if constexpr (bArenasInHeap)
         return MultiArena::UnsynchronizedArenaResource(numArenas, arenaSize);
@@ -31,7 +31,7 @@ auto makeUnsynchronizedArenaResource()
         return MultiArena::UnsynchronizedArenaResource<numArenas, arenaSize>();
 }
 
-auto makeSynchronizedArenaResource()
+static auto makeSynchronizedArenaResource()
 {
     if constexpr (bArenasInHeap)
         return MultiArena::SynchronizedArenaResource(numArenas, arenaSize);
@@ -43,10 +43,10 @@ auto makeSynchronizedArenaResource()
 template <unsigned ARRAY_SIZE, unsigned  VEC_SIZE>
 double runApplication(int id = 0)
 {
-    using T = int;
+    using T = double;
     constexpr unsigned numIterationsPerRound = 1 << 16;
     std::srand(0x1234abcd + id);
-    std::array<std::pmr::vector<int>, ARRAY_SIZE> aVec;
+    std::array<std::pmr::vector<T>, ARRAY_SIZE> aVec;
 
     std::size_t numRoundsDone = 0;
     double timeSoFar = 0;
@@ -66,7 +66,7 @@ double runApplication(int id = 0)
             // which is either a MultiArena allocator or the system new/delete allocator.
             aVec[j] = std::pmr::vector<T>();
             auto sz = std::rand() % (VEC_SIZE / sizeof(T)); // Size of the new vector
-            aVec[j].resize(sz);
+            aVec[j].assign(sz, T{});  // .resize(sz);
             // Fill the vector with known numbers
             k = 0;
             for (auto& val : aVec[j])
