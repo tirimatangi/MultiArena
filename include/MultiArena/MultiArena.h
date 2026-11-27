@@ -209,10 +209,8 @@ public:
         auto result = derived()->numArenas() - _freeListHead;
         // The active arena is counted as a busy even if there
         // are no allocations yet.
-        // If the active arena is the only one that possibly have allocations,
-        // we must check if the arena is actually empty.
-        if (result == 1 && allocationsInArena(_activeArenaId) == 0)
-            result = 0;
+        if (allocationsInArena(_activeArenaId) == 0)
+            result = result - 1;
         return result;
     }
 
@@ -473,10 +471,8 @@ public:
         auto result = derived()->numArenas() - _freeListHead;
         // The active arena is counted as a busy even if there
         // are no allocations yet.
-        // If the active arena is the only one that possibly have allocations,
-        // we must check if the arena is actually empty.
-        if (result == 1 && allocationsInArena(_activeArenaId) == 0)
-            result = 0;
+        if (allocationsInArena(_activeArenaId) == 0)
+            result = result - 1;
         return result;
     }
 
